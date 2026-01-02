@@ -1,0 +1,17 @@
+.gradle/
+build/
+!.gradle/
+!build.gradle.kts
+!settings.gradle.kts
+.DS_Store
+*.log
+*.tmp
+local.properties
+.idea/
+*.iml
+*.ipr
+*.iws
+out/
+*.class
+*.jar
+!server/build/libs/server-*.jar

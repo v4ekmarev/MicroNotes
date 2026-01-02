@@ -1,0 +1,105 @@
+package com.develop.uikit.components.native
+
+import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.layout.size
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.DpSize
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.viewinterop.UIKitInteropProperties
+import androidx.compose.ui.viewinterop.UIKitView
+import kotlinx.cinterop.BetaInteropApi
+import kotlinx.cinterop.ExperimentalForeignApi
+import kotlinx.cinterop.ObjCAction
+import kotlinx.cinterop.cValue
+import kotlinx.cinterop.useContents
+import platform.CoreGraphics.CGRectMake
+import platform.CoreGraphics.CGSizeZero
+import platform.Foundation.NSDate
+import platform.Foundation.NSLocale
+import platform.Foundation.NSSelectorFromString
+import platform.Foundation.NSTimeZone
+import platform.Foundation.currentLocale
+import platform.Foundation.dateWithTimeIntervalSince1970
+import platform.Foundation.timeIntervalSince1970
+import platform.Foundation.timeZoneWithName
+import platform.UIKit.UIControlEventValueChanged
+import platform.UIKit.UIDatePicker
+import platform.UIKit.UIDatePickerMode
+import platform.UIKit.UIDatePickerStyle
+
+@OptIn(ExperimentalForeignApi::class)
+@Composable
+actual fun NativeDatePicker(
+    state: NativeDatePickerState,
+    modifier: Modifier,
+    onDateSelected: ((Long) -> Unit)?
+) {
+    val updatedOnDateSelected by rememberUpdatedState(onDateSelected)
+
+    val datePicker = remember {
+        IOSDatePicker(
+            millis = state.selectedDateMillis,
+            mode = UIDatePickerMode.UIDatePickerModeDate,
+        ) { millis ->
+            state.setSelection(millis)
+            updatedOnDateSelected?.invoke(millis)
+        }
+    }
+
+    val size = remember(datePicker) {
+        datePicker.sizeThatFits(cValue { CGSizeZero })
+            .useContents { DpSize(width.dp, height.dp) }
+    }
+
+    val dark = isSystemInDarkTheme()
+
+    UIKitView<UIDatePicker>(
+        factory = {
+            datePicker.apply { applyTheme(dark) }
+        },
+        modifier = modifier.size(size),
+        update = {
+            it.preferredDatePickerStyle = UIDatePickerStyle.UIDatePickerStyleWheels
+            it.setDate(NSDate.dateWithTimeIntervalSince1970(state.selectedDateMillis / 1000.0), animated = false)
+            it.applyTheme(dark)
+        },
+        properties = UIKitInteropProperties(
+            isInteractive = true,
+            isNativeAccessibilityEnabled = true
+        )
+    )
+}
+
+@OptIn(ExperimentalForeignApi::class)
+private class IOSDatePicker(
+    millis: Long,
+    mode: UIDatePickerMode,
+    private val onChange: (Long) -> Unit
+) : UIDatePicker(CGRectMake(0.0, 0.0, 0.0, 0.0)) {
+    init {
+        timeZone = NSTimeZone.timeZoneWithName("UTC")
+        locale = NSLocale.currentLocale
+        setDate(
+            date = NSDate.dateWithTimeIntervalSince1970(millis / 1000.0),
+            animated = false
+        )
+        datePickerMode = mode
+        preferredDatePickerStyle = UIDatePickerStyle.UIDatePickerStyleWheels
+        addTarget(
+            target = this,
+            action = NSSelectorFromString("dateChanged:"),
+            forControlEvents = UIControlEventValueChanged
+        )
+    }
+
+    @OptIn(BetaInteropApi::class)
+    @ObjCAction
+    @Suppress("UNUSED")
+    fun dateChanged(picker: IOSDatePicker) {
+        onChange((picker.date.timeIntervalSince1970 * 1000).toLong())
+    }
+}
