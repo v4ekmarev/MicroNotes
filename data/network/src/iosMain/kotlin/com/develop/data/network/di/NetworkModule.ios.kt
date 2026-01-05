@@ -2,6 +2,8 @@ package com.develop.data.network.di
 
 import com.develop.data.network.api.DeviceIdProvider
 import com.develop.data.network.api.TokenProvider
+import com.develop.core.common.AppLogger
+import kotlinx.cinterop.BetaInteropApi
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.cinterop.alloc
 import kotlinx.cinterop.memScoped
@@ -10,6 +12,7 @@ import kotlinx.cinterop.value
 import org.koin.core.module.Module
 import org.koin.dsl.module
 import platform.CoreFoundation.CFDictionaryRef
+import platform.CoreFoundation.CFTypeRefVar
 import platform.Foundation.CFBridgingRelease
 import platform.Foundation.CFBridgingRetain
 import platform.Foundation.NSData
@@ -18,6 +21,8 @@ import platform.Foundation.NSUTF8StringEncoding
 import platform.Foundation.NSUserDefaults
 import platform.Foundation.create
 import platform.Foundation.dataUsingEncoding
+import platform.UIKit.UIDevice
+import platform.Foundation.NSUUID
 import platform.Security.SecItemAdd
 import platform.Security.SecItemCopyMatching
 import platform.Security.SecItemUpdate
@@ -33,6 +38,7 @@ import platform.Security.kSecMatchLimit
 import platform.Security.kSecMatchLimitOne
 import platform.Security.kSecReturnData
 import platform.Security.kSecValueData
+import platform.CoreFoundation.kCFBooleanTrue
 import platform.darwin.OSStatus
 
 actual fun getBaseUrl(): String = "http://localhost:8080"
@@ -65,32 +71,61 @@ class IosTokenProvider : TokenProvider {
     }
 }
 
+/**
+ * iOS реализация DeviceIdProvider с использованием Keychain.
+ * 
+ * Device ID сохраняется в iOS Keychain и переживает удаление/переустановку приложения.
+ * Это позволяет идентифицировать пользователя даже после переустановки.
+ * 
+ * Используется [kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly] для баланса
+ * безопасности и удобства - данные доступны после первой разблокировки устройства.
+ * 
+ * Приоритет генерации Device ID:
+ * 1. Существующий ID из Keychain
+ * 2. [UIDevice.identifierForVendor] (уникальный для vendor)
+ * 3. [NSUUID] (случайный UUID)
+ * 
+ * Все операции логируются с префиксом [IosDeviceIdProvider] для отладки.
+ */
 @OptIn(ExperimentalForeignApi::class)
 class IosDeviceIdProvider : DeviceIdProvider {
     
+    @OptIn(BetaInteropApi::class)
     override suspend fun getDeviceId(): String? {
         val query = mapOf<Any?, Any?>(
             kSecClass to kSecClassGenericPassword,
             kSecAttrService to SERVICE_NAME,
             kSecAttrAccount to ACCOUNT_NAME,
-            kSecReturnData to true,
+            kSecReturnData to kCFBooleanTrue,
             kSecMatchLimit to kSecMatchLimitOne
         )
         
         return memScoped {
-            val result = alloc<CFDictionaryRef?>()
+            val result = alloc<CFTypeRefVar>()
             val status: OSStatus = SecItemCopyMatching(
                 query.toCFDictionary(),
-                result.ptr.reinterpret()
+                result.ptr
             )
             
-            if (status == errSecSuccess) {
-                val data = CFBridgingRelease(result.value) as? NSData
-                data?.let {
-                    NSString.create(data = it, encoding = NSUTF8StringEncoding) as? String
+            when (status) {
+                errSecSuccess -> {
+                    val data = CFBridgingRelease(result.value) as? NSData
+                    data?.let {
+                        NSString.create(data = it, encoding = NSUTF8StringEncoding) as? String
+                    }
                 }
-            } else {
-                null
+                errSecItemNotFound -> {
+                    // Если в Keychain нет, генерируем новый ID и сохраняем
+                    AppLogger.d("IosDeviceIdProvider", "Device ID not found in Keychain, generating new one")
+                    val newDeviceId = UIDevice.currentDevice.identifierForVendor?.UUIDString 
+                        ?: NSUUID().UUIDString
+                    saveDeviceId(newDeviceId)
+                    newDeviceId
+                }
+                else -> {
+                    AppLogger.e("IosDeviceIdProvider", "Error reading from Keychain: status=$status")
+                    null
+                }
             }
         }
     }
@@ -111,16 +146,28 @@ class IosDeviceIdProvider : DeviceIdProvider {
             kSecValueData to data,
             kSecAttrAccessible to kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
         )
-        
-        var status: OSStatus = SecItemCopyMatching(query.toCFDictionary(), null)
-        
-        if (status == errSecItemNotFound) {
-            SecItemAdd(attributes.toCFDictionary(), null)
-        } else if (status == errSecSuccess) {
-            val updateAttributes = mapOf<Any?, Any?>(
-                kSecValueData to data
-            )
-            SecItemUpdate(query.toCFDictionary(), updateAttributes.toCFDictionary())
+
+        val status: OSStatus = SecItemCopyMatching(query.toCFDictionary(), null)
+
+        when (status) {
+            errSecItemNotFound -> {
+                val addStatus = SecItemAdd(attributes.toCFDictionary(), null)
+                if (addStatus != errSecSuccess) {
+                    AppLogger.e("IosDeviceIdProvider", "Error adding to Keychain: status=$addStatus")
+                }
+            }
+            errSecSuccess -> {
+                val updateAttributes = mapOf<Any?, Any?>(
+                    kSecValueData to data
+                )
+                val updateStatus = SecItemUpdate(query.toCFDictionary(), updateAttributes.toCFDictionary())
+                if (updateStatus != errSecSuccess) {
+                    AppLogger.e("IosDeviceIdProvider", "Error updating Keychain: status=$updateStatus")
+                }
+            }
+            else -> {
+                AppLogger.e("IosDeviceIdProvider", "Error checking Keychain: status=$status")
+            }
         }
     }
     

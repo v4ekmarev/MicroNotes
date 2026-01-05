@@ -1,5 +1,6 @@
 package com.develop.feature.contacts.data
 
+import com.develop.core.common.AppLogger
 import com.develop.feature.contacts.domain.PhoneContactsProvider
 import com.develop.feature.contacts.domain.model.PhoneContact
 import kotlinx.cinterop.ExperimentalForeignApi
@@ -28,10 +29,10 @@ class IosPhoneContactsProvider : PhoneContactsProvider {
         
         try {
             store.enumerateContactsWithFetchRequest(request, error = null) { contact, _ ->
-                val name = "${contact.givenName} ${contact.familyName}".trim()
+                val name = "${contact?.givenName ?: ""} ${contact?.familyName ?: ""}".trim()
                 
                 @Suppress("UNCHECKED_CAST")
-                val phoneNumbers = contact.phoneNumbers as? List<CNLabeledValue<CNPhoneNumber>> ?: emptyList()
+                val phoneNumbers = contact?.phoneNumbers as? List<CNLabeledValue> ?: emptyList()
                 
                 phoneNumbers.forEach { labeledValue ->
                     val phoneNumber = labeledValue.value as? CNPhoneNumber
@@ -43,7 +44,7 @@ class IosPhoneContactsProvider : PhoneContactsProvider {
                 }
             }
         } catch (e: Exception) {
-            // Ignore errors, return empty list
+            AppLogger.d("IosPhoneContactsProvider", e.message.orEmpty())
         }
         
         return contacts.distinctBy { normalizePhone(it.phone) }

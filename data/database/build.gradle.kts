@@ -49,8 +49,12 @@ android {
 
     defaultConfig {
         minSdk = libs.versions.android.minSdk.get().toInt()
-        targetSdk = libs.versions.android.targetSdk.get().toInt()
         consumerProguardFiles("consumer-rules.pro")
+    }
+    
+    // Room schema export
+    ksp {
+        arg("room.schemaLocation", "$projectDir/schemas")
     }
 
     compileOptions {

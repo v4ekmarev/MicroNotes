@@ -21,4 +21,21 @@ subprojects {
             )
         }
     }
+    
+    // Для KMP компиляторов
+    afterEvaluate {
+        extensions.findByType<org.jetbrains.kotlin.gradle.dsl.KotlinMultiplatformExtension>()?.let { kmpExt ->
+            kmpExt.targets.all {
+                compilations.all {
+                    compileTaskProvider.configure {
+                        compilerOptions {
+                            freeCompilerArgs.addAll(
+                                "-opt-in=kotlin.time.ExperimentalTime"
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
